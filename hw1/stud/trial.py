@@ -129,12 +129,17 @@ class SentenceDataset(Dataset):
         sentence = dict()
         with open(path) as file:
             tsv_file = csv.reader(file, delimiter="\t")
-            for line in tsv_file:
-                if line[0] == '#':
-                    sentences.append(sentence)
-                    sentence =
-                else:
-                    sentence.append((line))
+            for idx,line in enumerate(tsv_file):
+                if len(line) > 0:
+                    if line[0] == '#':
+                        sentences.append(dict())
+                        sentences[-1]["id"] = line[2]
+                        sentences[-1]["text"] = []
+                        sentences[-1]["labels"] = []
+                    else:
+                        sentences[-1]["text"].append(line[0])
+                        sentences[-1]["labels"].append(line[1])
+        print(sentences)
         return sentences
 
     #function to extract the sentences from the dictionary of samples
@@ -143,7 +148,7 @@ class SentenceDataset(Dataset):
         for instance in file_output:
             processed = self.text_preprocess(instance['text'])  #preprocessing of the sentence
             label = 'UNKNOWN'   #this is needed to make the system able to give a prediction without having a ground truth
-            if 'label' in instance: #then if there is a ground truth we take it
+            if 'labels' in instance: #then if there is a ground truth we take it
                 label = instance['label']
             self.sentences.append((processed, label, instance["id"]))           #append a triple (sentence,label,id) which are all the informations we need
         if not self.test: random.Random(42).shuffle(self.sentences)         #for the training phase, shuffle data to avoid bias relative to data order
