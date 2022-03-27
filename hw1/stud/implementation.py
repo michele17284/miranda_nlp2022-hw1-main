@@ -47,10 +47,10 @@ SENTENCE_MAX_LEN=50
 #specify the device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 #device = torch.device("cpu")
-print(device)
+print(device,"eeeeeeeeeeeeeeeee")
 #setting unknown token  to handle out of vocabulary words
 UNK_TOKEN = '<unk>'
-
+PAD_TOKEN = '<pad>'
 TRAIN_PATH = "./data/train.tsv"
 DEV_PATH = "./data/dev.tsv"
 
@@ -75,6 +75,7 @@ def create_embeddings(vocabulary,embedding_dim=EMBEDDING_DIM):
     vectors.append(torch.rand(embedding_dim))   #creating a random vector for unknown (out of vocabulary) words
     vectors.append(torch.rand(embedding_dim))   #creating a random vector for padding
     word2idx[UNK_TOKEN] = 0                     #setting the index of the unknown token to 0
+    word2idx[PAD_TOKEN] = 1
     for word,vector in vocabulary.items():      #creating the word:index entry and insert in vectors
         word2idx[word] = len(vectors)           #the word vector at the corresponding index for each word
         vectors.append(torch.tensor(vector))    #in the dictionary
@@ -178,7 +179,7 @@ class SentenceDataset(Dataset):
     def text_preprocess(self,sentence):
         text = sentence["text"]
         labels = sentence["labels"]
-        sent = [(text[i],labels[i]) for i in range(len(text)) if text[i] not in string.punctuation and text[i] not in stop_tokens]
+        sent = [(text[i],labels[i]) for i in range(len(text))]# if text[i] not in string.punctuation and text[i] not in stop_tokens]
         sentence["text"] = [pair[0] for pair in sent]
         sentence["labels"] = [pair[1] for pair in sent]
         return sentence
@@ -338,9 +339,8 @@ class StudentModel(Model):
         # STUDENT: implement here your predict function
         # remember to respect the same order of tokens!
         batch_size = 32
-        print(tokens)
         predictions = list()
-        dataset = SentenceDataset(sentences=tokens, vectors=embeddings, word2idx=word2idx)
+        dataset = SentenceDataset(sentences=tokens, vectors=embeddings, word2idx=word2idx,test=True)
         dataloader = dataset.dataloader(batch_size)
         for batch in dataloader:
             batch_x = batch[0]
@@ -349,12 +349,15 @@ class StudentModel(Model):
             logits = self.forward(batch_x, batch_xlen)
             logits = logits.view(-1, logits.shape[-1])
             preds = torch.argmax(logits,dim=1)
-            preds = torch.reshape(preds,(batch_size,-1))
+            preds = torch.reshape(preds,(batch_x.size(0),-1))
             for i in range(len(batch_x)):
                 prediction = []
-                for j in range(len(batch_x[0])):
-                    if batch_x[i][j] != 1:
-                        prediction.append(dataset.class2id[preds[i][j]])
+                for j in range(len(batch_x[i])):
+                    if batch_x[i][j].item() != 1:
+                        #print(preds)
+                        #print(preds[i])
+                        prediction.append(dataset.id2class[preds[i][j].item()])
+                predictions.append(prediction)
 
 
 

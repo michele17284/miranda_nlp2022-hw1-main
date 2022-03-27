@@ -2,7 +2,7 @@ import string
 
 import numpy as np
 from typing import List, Tuple
-
+import sklearn
 
 from typing import List, Dict
 import json
@@ -20,7 +20,6 @@ from nltk.corpus import wordnet
 from string import punctuation
 from collections import defaultdict
 from functools import partial
-
 
 
 torch.manual_seed(42)
@@ -144,7 +143,7 @@ class SentenceDataset(Dataset):
             d = dict()
             d["id"] = idx
             d["text"] = line
-            d["labels"] = [-1 for token in line]
+            d["labels"] = ["O" for token in line]
             sents.append(d)
         return sents
 
@@ -174,7 +173,7 @@ class SentenceDataset(Dataset):
     def text_preprocess(self,sentence):
         text = sentence["text"]
         labels = sentence["labels"]
-        sent = [(text[i],labels[i]) for i in range(len(text)) if text[i] not in string.punctuation and text[i] not in stop_tokens]
+        sent = [(text[i],labels[i]) for i in range(len(text))]# if text[i] not in string.punctuation and text[i] not in stop_tokens]
         sentence["text"] = [pair[0] for pair in sent]
         sentence["labels"] = [pair[1] for pair in sent]
         return sentence
@@ -287,6 +286,35 @@ class StudentModel(nn.Module):             #needed for training
         #print(out.size())
         out = torch.softmax(out,dim=-1)
         return out
+
+    def predict(self, tokens: List[List[str]]) -> List[List[str]]:
+        # STUDENT: implement here your predict function
+        # remember to respect the same order of tokens!
+        batch_size = 32
+        predictions = list()
+        dataset = SentenceDataset(sentences=tokens, vectors=embeddings, word2idx=word2idx, test=True)
+        dataloader = dataset.dataloader(batch_size)
+        for batch in dataloader:
+            batch_x = batch[0]
+            batch_xlen = batch[1]
+            ids = batch[3]
+            logits = self.forward(batch_x, batch_xlen)
+            logits = logits.view(-1, logits.shape[-1])
+            preds = torch.argmax(logits, dim=1)
+            preds = torch.reshape(preds, (batch_x.size(0), -1))
+            for i in range(len(batch_x)):
+                prediction = []
+                for j in range(len(batch_x[i])):
+                    if j < batch_xlen[i]:
+                        # print(preds)
+                        # print(preds[i])
+                        prediction.append(dataset.id2class[preds[i][j].item()])
+                predictions.append(prediction)
+
+        print(len(tokens), len(predictions))
+        print(tokens)
+        print(predictions)
+        return predictions
     '''
     
     
@@ -346,6 +374,7 @@ class Trainer():
                 #print(logits)
                 #print(labels)
                 loss = self.model.loss_fn(logits, labels)                #calculating the loss
+                f1 = sklearn.metrics.f1_score(labels,logits)
                 for j in range(len(logits)):                                      #checking the number of hits in order to compute accuracy
                     total += 1
                     if torch.argmax(logits[j]) == labels[j]: hit += 1
@@ -398,7 +427,34 @@ class Trainer():
 
 
 
+def read_dataset(path: str) -> Tuple[List[List[str]], List[List[str]]]:
 
+    tokens_s = []
+    labels_s = []
+
+    tokens = []
+    labels = []
+
+    with open(path) as f:
+
+        for line in f:
+
+            line = line.strip()
+
+            if line.startswith("#\t"):
+                tokens = []
+                labels = []
+            elif line == "":
+                tokens_s.append(tokens)
+                labels_s.append(labels)
+            else:
+                token, label = line.split("\t")
+                tokens.append(token)
+                labels.append(label)
+
+    assert len(tokens_s) == len(labels_s)
+
+    return tokens_s, labels_s
 
 #utility function to plot accuracy and loss
 def plot_logs(history,param):
@@ -412,7 +468,7 @@ def plot_logs(history,param):
     plt.ylabel('Loss')
     plt.legend(loc="upper right")
     plt.show()
-model_path = "./myModel.ckpt"
+model_path = "../../model/myModel.ckpt"
 glove = create_glove()                                          #create glove dictionary
 embeddings,word2idx = create_embeddings(glove)                  #create and indexing embeddings
 print(len(embeddings))
@@ -443,8 +499,10 @@ torch.save(model.state_dict(), model_path)                                      
 
 
 '''
-
 model.load_state_dict(torch.load(model_path,map_location=device))
+model.predict(read_dataset(DEV_PATH)[0])
+y_true = [18, 15, 16, 24, 16, 16, 21, 19, 10, 12, 12, 13, 13, 15, 14, 31, 13, 17, 20, 8, 29, 8, 15, 23, 14, 24, 30, 23, 31, 20, 14, 21, 16, 16, 27, 26, 13, 18, 16, 15, 18, 27, 10, 24, 13, 14, 14, 11, 25, 21, 19, 10, 16, 18, 23, 12, 12, 7, 11, 22, 10, 23, 19, 13, 18, 20, 12, 8, 12, 32, 20, 14, 6, 16, 26, 24, 16, 13, 20, 21, 17, 15, 24, 12, 12, 19, 11, 12, 15, 16, 19, 10, 17, 11, 17, 9, 28, 9, 14, 24, 17, 19, 27, 20, 17, 10, 16, 13, 6, 15, 15, 18, 19, 24, 20, 9, 16, 19, 9, 24, 9, 15, 24, 25, 11, 22, 17, 16, 13, 27, 7, 18, 15, 18, 22, 13, 24, 19, 7, 16, 9, 27, 8, 14, 16, 26, 2, 12, 14, 14, 11, 9, 23, 12, 13, 19, 14, 10, 17, 7, 12, 14, 12, 18, 21, 14, 22, 16, 18, 10, 22, 18, 12, 10, 28, 11, 25, 15, 12, 15, 17, 16, 13, 17, 19, 14, 26, 20, 18, 16, 15, 18, 22, 13, 21, 27, 8, 13, 12, 15, 19, 29, 11, 13, 12, 17, 22, 16, 13, 18, 26, 9, 19, 16, 29, 13, 31, 16, 6, 29, 26, 25, 23, 12, 33, 13, 11, 22, 13, 26, 10, 24, 24, 6, 19, 7, 10, 29, 11, 14, 16, 6, 8, 20, 26, 21, 2, 14, 23, 11, 29, 18, 12, 21, 30, 30, 14, 15, 20, 16, 9, 11, 16, 24, 22, 10, 27, 20, 15, 14, 10, 20, 21, 18, 16, 16, 16, 8, 8, 17, 17, 10, 17, 6, 15, 19, 18, 16, 29, 14, 15, 13, 13, 25, 23, 13, 26, 11, 9, 30, 12, 9, 10, 23, 7, 24, 23, 10, 9, 21, 15, 28, 20, 14, 10, 18, 17, 16, 9, 20, 20, 33, 14, 11, 9, 15, 25, 14, 14, 23, 29, 10, 8, 20, 20, 13, 23, 11, 9, 9, 11, 9, 9, 28, 9, 9, 19, 17, 10, 11, 8, 2, 8, 8, 25, 21, 23, 25, 18, 10, 8, 8, 27, 14, 12, 9, 18, 20, 14, 15, 21, 26, 7, 9, 21, 31, 20, 10, 13, 21, 17, 17, 26, 6, 14, 23, 18, 24, 8, 16, 9, 24, 26, 16, 11, 22, 19, 19, 33, 20, 18, 23, 19, 10, 28, 19, 20, 17, 16, 27, 19, 15, 10, 13, 16, 22, 9, 12, 14, 16, 9, 10, 17, 25, 14, 33, 19, 19, 17, 7, 25, 14, 11, 22, 9, 15, 13, 22, 12, 6, 13, 16, 15, 24, 28, 6, 12, 20, 27, 11, 20, 11, 13, 10, 23, 19, 24, 31, 21, 23, 8, 12, 11, 9, 17, 18, 5, 11, 20, 13, 24, 24, 21, 29, 13, 11, 15, 13, 19, 8, 29, 8, 11, 25, 11, 13, 29, 10, 10, 17, 9, 17, 15, 19, 20, 15, 21, 17, 13, 13, 12, 17, 12, 16, 24, 21, 9, 22, 13, 8, 25, 12, 29, 15, 21, 24, 11, 12, 14, 14, 16, 10, 8, 23, 11, 16, 16, 22, 24, 16, 21, 22, 13, 33, 11, 20, 22, 11, 13, 14, 13, 17, 15, 15, 18, 14, 8, 11, 8, 5, 14, 17, 16, 28, 6, 20, 6, 17, 10, 12, 11, 12, 18, 14, 9, 28, 12, 20, 10, 12, 14, 19, 16, 10, 13, 13, 13, 9, 24, 17, 13, 16, 13, 13, 14, 11, 2, 15, 12, 11, 14, 8, 10, 31, 20, 9, 9, 10, 16, 8, 23, 32, 8, 15, 20, 12, 33, 12, 13, 20, 12, 32, 11, 10, 15, 10, 20, 22, 33, 29, 17, 9, 10, 23, 18, 17, 12, 16, 17, 22, 18, 13, 18, 19, 15, 28, 12, 10, 34, 24, 27, 11, 12, 19, 10, 6, 24, 15, 20, 12, 17, 14, 19, 16, 23, 14, 18, 7, 12, 23, 22, 15, 31, 15, 21, 14, 21, 18, 25, 29, 24, 24, 12, 15, 8, 15, 18, 11, 15, 7, 26, 25, 17, 17, 17, 9, 29, 18, 24, 12, 13, 14, 14, 24, 10, 9, 24, 18, 17, 9, 16, 21, 28, 12, 12, 10, 30, 11, 11, 22, 12, 27, 17, 32, 10, 32, 23, 19, 13, 18, 6, 22, 13, 22, 10, 11, 33, 16, 22, 17, 9, 17, 8, 30, 10, 22, 34, 17, 21, 15, 23, 33, 30, 19, 12, 16, 25, 9, 9, 22, 9, 24, 23, 28, 13, 19, 18, 15, 15, 18, 18, 18, 11, 14, 12]
+y_pred = [30, 16, 12, 31, 24, 13, 15, 21, 8, 13, 13, 12, 31, 14, 14, 29, 14, 15, 15, 20, 16, 17, 8, 24, 20, 16, 23, 21, 10, 23, 18, 19, 11, 18, 10, 11, 7, 24, 23, 16, 10, 13, 25, 27, 10, 14, 12, 16, 19, 16, 14, 19, 27, 21, 18, 26, 23, 13, 22, 13, 18, 12, 16, 15, 19, 32, 26, 21, 16, 24, 11, 20, 12, 16, 17, 16, 17, 20, 15, 12, 17, 20, 13, 24, 12, 15, 19, 8, 11, 12, 10, 9, 6, 12, 18, 14, 24, 19, 16, 18, 15, 13, 9, 27, 9, 6, 19, 10, 11, 15, 9, 16, 17, 9, 15, 20, 14, 24, 19, 24, 22, 17, 25, 16, 17, 24, 28, 20, 13, 18, 7, 14, 12, 16, 11, 22, 12, 9, 16, 19, 14, 8, 23, 14, 17, 27, 27, 2, 7, 26, 14, 18, 10, 15, 19, 7, 24, 9, 13, 13, 26, 14, 22, 11, 14, 18, 13, 22, 15, 12, 25, 10, 18, 28, 19, 17, 15, 14, 10, 12, 12, 15, 16, 18, 16, 21, 20, 18, 18, 17, 12, 16, 6, 13, 11, 16, 16, 13, 29, 12, 9, 12, 13, 29, 26, 22, 31, 19, 23, 13, 17, 26, 21, 18, 16, 27, 25, 8, 29, 12, 19, 13, 22, 15, 29, 26, 19, 14, 11, 7, 2, 10, 20, 10, 16, 6, 12, 11, 23, 26, 30, 13, 29, 8, 11, 6, 21, 22, 21, 13, 18, 30, 24, 14, 33, 24, 17, 11, 27, 20, 10, 20, 8, 16, 16, 15, 21, 10, 15, 10, 17, 16, 18, 15, 14, 16, 20, 18, 8, 16, 19, 9, 6, 16, 22, 17, 14, 24, 10, 25, 9, 23, 14, 30, 15, 23, 10, 12, 7, 11, 17, 10, 20, 9, 9, 14, 9, 23, 15, 24, 21, 13, 16, 13, 18, 20, 26, 28, 29, 13, 19, 15, 29, 13, 9, 10, 9, 25, 9, 8, 23, 23, 10, 20, 9, 11, 8, 33, 20, 9, 14, 11, 9, 11, 11, 9, 17, 2, 14, 28, 20, 14, 13, 25, 27, 20, 10, 14, 21, 18, 26, 12, 14, 8, 17, 18, 20, 7, 26, 8, 9, 21, 25, 15, 9, 21, 17, 23, 21, 6, 8, 31, 8, 10, 19, 16, 11, 20, 27, 22, 20, 9, 10, 19, 18, 16, 10, 33, 16, 28, 16, 23, 19, 19, 18, 23, 19, 24, 13, 8, 15, 22, 26, 17, 14, 24, 15, 10, 19, 14, 16, 19, 12, 17, 15, 17, 11, 33, 28, 25, 13, 13, 12, 12, 7, 9, 14, 22, 22, 16, 6, 9, 24, 20, 14, 6, 9, 25, 13, 10, 21, 9, 29, 23, 24, 23, 11, 8, 17, 31, 15, 11, 21, 20, 19, 11, 12, 5, 20, 18, 13, 11, 13, 13, 11, 8, 24, 24, 27, 19, 9, 13, 9, 15, 21, 17, 12, 29, 13, 15, 21, 17, 13, 20, 24, 12, 25, 8, 19, 13, 11, 17, 17, 25, 8, 11, 22, 12, 10, 16, 29, 10, 13, 12, 8, 22, 11, 23, 11, 14, 22, 11, 24, 10, 13, 16, 22, 13, 15, 15, 16, 21, 21, 16, 33, 24, 17, 11, 14, 15, 16, 20, 29, 14, 14, 5, 6, 12, 12, 20, 12, 14, 14, 6, 11, 28, 16, 10, 10, 9, 13, 14, 17, 18, 8, 12, 28, 11, 10, 8, 19, 13, 16, 20, 18, 17, 8, 16, 2, 8, 32, 15, 16, 13, 9, 12, 10, 11, 20, 14, 23, 9, 33, 9, 11, 20, 24, 31, 10, 17, 12, 13, 15, 12, 14, 8, 13, 13, 15, 10, 33, 23, 19, 29, 18, 15, 16, 17, 18, 22, 12, 10, 18, 17, 34, 20, 9, 12, 12, 17, 22, 32, 10, 11, 28, 24, 20, 13, 13, 10, 21, 6, 17, 14, 14, 14, 31, 24, 23, 19, 18, 12, 25, 23, 21, 22, 24, 11, 16, 12, 12, 7, 15, 19, 29, 10, 18, 24, 20, 15, 27, 15, 17, 11, 17, 18, 18, 17, 10, 15, 14, 17, 24, 25, 16, 29, 24, 14, 28, 15, 9, 13, 8, 12, 24, 15, 21, 18, 9, 12, 26, 9, 12, 7, 9, 22, 10, 18, 17, 32, 33, 12, 22, 23, 6, 32, 8, 13, 22, 10, 10, 10, 19, 13, 30, 22, 11, 11, 30, 11, 17, 22, 17, 16, 12, 27, 13, 9, 25, 15, 15, 30, 33, 9, 9, 24, 16, 18, 19, 12, 23, 11, 17, 22, 21, 28, 14, 23, 18, 19, 12, 18, 34, 15, 18]
 
 #'''
 
