@@ -238,8 +238,8 @@ class StudentModel(nn.Module):             #needed for training
     #of layers of the lstm layer and the loss function (but these last 4 already have a default value)
     def __init__(self,embeddings,   #word embedding vectors
                  pos_embeddings=None,    #pos embedding vectors
-                 hidden1=512,           #dimension of the first hidden layer
-                 hidden2=512,           #dimension of the second hidden layer
+                 hidden1=128,           #dimension of the first hidden layer
+                 hidden2=128,           #dimension of the second hidden layer
                  p=0.0,             #probability of dropour layer
                  bidirectional=False,   #flag to decide if the LSTM must be bidirectional
                  lstm_layers=1,         #layers of the LSTM
@@ -250,8 +250,8 @@ class StudentModel(nn.Module):             #needed for training
         hidden1 = hidden1*2 if bidirectional else hidden1                                                                       #based on wether pos embeddings were created
         input_dim = embeddings.size(1) if not self.pos_embeddings else embeddings.size(1)+pos_embeddings.size(1)                #or not
         self.lstm = nn.LSTM(input_size=input_dim, hidden_size=hidden1, num_layers=lstm_layers, batch_first=True, bidirectional=bidirectional)
-        self.lin1 = nn.Linear(hidden1, 13)
-        #self.lin2 = nn.Linear(hidden2,13)
+        self.lin1 = nn.Linear(hidden1, hidden2)
+        self.lin2 = nn.Linear(hidden2,13)
         self.loss_fn = loss_fn
         self.dropout = nn.Dropout(p=p)
 
@@ -280,8 +280,8 @@ class StudentModel(nn.Module):             #needed for training
         out = torch.relu(out)
         #print(out.size())
         out = self.lin1(out)
-
-        #out = self.lin2(out)
+        out = torch.relu(out)
+        out = self.lin2(out)
         out = out.squeeze(1)
         #print(out.size())
         out = torch.softmax(out,dim=-1)
@@ -306,14 +306,14 @@ class StudentModel(nn.Module):             #needed for training
                 prediction = []
                 for j in range(len(batch_x[i])):
                     if j < batch_xlen[i]:
-                        # print(preds)
-                        # print(preds[i])
+                        print(preds)
+                        print("preds[i] ",preds[i])
                         prediction.append(dataset.id2class[preds[i][j].item()])
                 predictions.append(prediction)
 
         print(len(tokens), len(predictions))
-        print(tokens)
-        print(predictions)
+        #print(tokens)
+        #print(predictions)
         return predictions
     '''
     
@@ -355,12 +355,13 @@ class Trainer():
     #that after that point it just gets worse
     def train(self,train_loader, dev_loader,patience, epochs=10):
         loss_history = [[], []]             #lists to save trainset and devset loss in order to plot the graph later
-        accuracy_history = [[], []]         #lists to save trainset and devset accuracy in order to plot the graph later
+        f1_history = [[], []]         #lists to save trainset and devset accuracy in order to plot the graph later
         patience_counter = 0                #counter to implement patience
         for i in range(epochs):
             losses = []                     #list to save the loss for each batch
             hit = 0                         #counter for correct predictions
             total = 0                       #counter for all predictions
+            f1s = []
             for batch in train_loader:
                 batch_x = batch[0]         #separating first from second sentences
                 batch_xlen = batch[1]      #separating lengths of first and second sentences
@@ -374,22 +375,31 @@ class Trainer():
                 #print(logits)
                 #print(labels)
                 loss = self.model.loss_fn(logits, labels)                #calculating the loss
-                f1 = sklearn.metrics.f1_score(labels,logits)
+                max_logits = torch.argmax(logits, dim=1)
+                f1s.append(sklearn.metrics.f1_score(labels.cpu().detach().numpy(),max_logits.cpu().detach().numpy(),
+                                                    average="macro"))
+                '''
                 for j in range(len(logits)):                                      #checking the number of hits in order to compute accuracy
                     total += 1
                     if torch.argmax(logits[j]) == labels[j]: hit += 1
+                '''
                 loss.backward()             #backpropagating the loss
                 self.optimizer.step()       #adjusting the model parameters to the loss
                 losses.append(loss.item())  #appending the losses to losses
+            '''
             accuracy = hit/total            #computing accuracy
             accuracy_history[0].append(accuracy)    #appending accuracy to accuracy history
+            '''
+            f1 = sum(f1s)/len(f1s)
+            f1_history[0].append(f1)
             mean_loss = sum(losses) / len(losses)   #computing the mean loss for each epoch
             loss_history[0].append(mean_loss)       #appending the mean loss of each epoch to loss history
-            metrics = {'mean_loss': mean_loss, 'accuracy': accuracy}    #displaying results of the epoch
+            metrics = {'mean_loss': mean_loss, 'f1': f1}    #displaying results of the epoch
             print(f'Epoch {i}   values on training set are {metrics}')
             #the same exact process is repeated on the instances of the devset, minus gradient backpropagation and optimization of course
             hit = 0
             total = 0
+            f1s = []
             with torch.no_grad():
                 #RESET LOSSES????
                 for batch in dev_loader:
@@ -403,16 +413,21 @@ class Trainer():
                     max_logits = torch.argmax(logits,dim=1)
                     loss = self.model.loss_fn(logits, labels)
                     losses.append(loss.item())
+                    f1s.append(sklearn.metrics.f1_score(labels.cpu().detach().numpy(), max_logits.cpu().detach().numpy(),
+                                                        average="macro"))
+                    '''
                     for j in range(len(logits)):
                         total += 1
                         if torch.argmax(logits[j]) == labels[j]: hit += 1
+                    '''
             mean_loss = sum(losses) / len(losses)
             loss_history[1].append(mean_loss)
-            accuracy = hit / total
-            accuracy_history[1].append(accuracy)
-            metrics = {'mean_loss': mean_loss, 'accuracy': accuracy}
+            f1 = sum(f1s) / len(f1s)
+            f1_history[1].append(f1)
+            metrics = {'mean_loss': mean_loss, 'f1': f1}
             print(f'            final values on the dev set are {metrics}')
-            if len(accuracy_history[1]) > 1 and accuracy_history[1][-1] < accuracy_history[1][-2]:
+
+            if len(f1_history[1]) > 1 and f1_history[1][-1] < f1_history[1][-2]:
                 patience_counter += 1
                 if patience == patience_counter:
                     print('-----------------------------EARLY STOP--------------------------------------------')
@@ -422,7 +437,7 @@ class Trainer():
 
         return {
             'loss_history': loss_history,
-            'accuracy_history': accuracy_history
+            'f1_history': f1_history
         }
 
 
@@ -473,9 +488,9 @@ glove = create_glove()                                          #create glove di
 embeddings,word2idx = create_embeddings(glove)                  #create and indexing embeddings
 print(len(embeddings))
 print("CREATED VOCABULARY")
-model = StudentModel(embeddings,p=0.5).to(device)         #instantiating the model
+model = StudentModel(embeddings,bidirectional=False,hidden1=128,hidden2=128,lstm_layers=5,p=0.5).to(device)         #instantiating the model
 print("CREATED MODEL")
-#'''
+'''
 
 
 train_dataset = SentenceDataset(sentences_path=TRAIN_PATH,vectors=embeddings,word2idx=word2idx) #instantiating the training dataset
@@ -488,10 +503,10 @@ train_dl = train_dataset.dataloader(batch_size=64)                         #inst
 dev_dl = dev_dataset.dataloader(batch_size=64)
 
 print("CREATED DATALOADERS")
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.00) #instantiating the optimizer
+optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=0.00) #instantiating the optimizer
 trainer = Trainer(model,optimizer)                                              #instantiating the trainer
-histories = trainer.train(train_loader=train_dl,dev_loader=dev_dl,patience=10,epochs=100)    #training
-params = ['loss', 'accuracy']                                                   #plotting the metrics
+histories = trainer.train(train_loader=train_dl,dev_loader=dev_dl,patience=10,epochs=50)    #training
+params = ['loss', 'f1']                                                   #plotting the metrics
 for param in params:
     plot_logs(histories[param + '_history'], param)
 torch.save(model.state_dict(), model_path)                                      #saving the model

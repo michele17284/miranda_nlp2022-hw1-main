@@ -53,7 +53,7 @@ UNK_TOKEN = '<unk>'
 PAD_TOKEN = '<pad>'
 TRAIN_PATH = "./data/train.tsv"
 DEV_PATH = "./data/dev.tsv"
-
+MODEL_PATH = "./model/myModel.ckpt"
 
 
 #creating a vocabulary with glove embeddings
@@ -238,7 +238,10 @@ def build_model(device: str) -> Model:
     # STUDENT: return StudentModel()
     # STUDENT: your model MUST be loaded on the device "device" indicates
 
-    return StudentModel(embeddings=embeddings)
+    my_model = StudentModel(embeddings,bidirectional=False,hidden1=128,hidden2=128,lstm_layers=5,p=0.5).to(device)         #instantiating the model
+
+    my_model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+    return my_model
 
 
 class RandomBaseline(Model):
@@ -270,7 +273,7 @@ class RandomBaseline(Model):
         ]
 
 
-class StudentModel(Model):
+class StudentModel(nn.Module,Model):
 
     # STUDENT: construct here your model
     # this class should be loading your weights and vocabulary
@@ -294,8 +297,8 @@ class StudentModel(Model):
             1)  # or not
         self.lstm = nn.LSTM(input_size=input_dim, hidden_size=hidden1, num_layers=lstm_layers, batch_first=True,
                             bidirectional=bidirectional)
-        self.lin1 = nn.Linear(hidden1, 13)
-        # self.lin2 = nn.Linear(hidden2,13)
+        self.lin1 = nn.Linear(hidden1, hidden2)
+        self.lin2 = nn.Linear(hidden2, 13)
         self.loss_fn = loss_fn
         self.dropout = nn.Dropout(p=p)
 
@@ -354,8 +357,8 @@ class StudentModel(Model):
                 prediction = []
                 for j in range(len(batch_x[i])):
                     if batch_x[i][j].item() != 1:
-                        #print(preds)
-                        #print(preds[i])
+                        print(preds)
+                        print(preds[i])
                         prediction.append(dataset.id2class[preds[i][j].item()])
                 predictions.append(prediction)
 
