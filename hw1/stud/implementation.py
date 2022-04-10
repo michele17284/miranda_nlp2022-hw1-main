@@ -20,6 +20,8 @@ from string import punctuation
 from collections import defaultdict
 from functools import partial
 
+from torchcrf import CRF
+
 from model import Model
 
 
@@ -40,9 +42,8 @@ stop_tokens.update(punc_tokens)
 lemmatizer = WordNetLemmatizer()
 
 #setting the embedding dimension
-EMBEDDING_DIM=50
-
-SENTENCE_MAX_LEN=50
+EMBEDDING_DIM=100
+POS_EMBEDDING_DIM=10
 
 #specify the device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -53,7 +54,7 @@ UNK_TOKEN = '<unk>'
 PAD_TOKEN = '<pad>'
 TRAIN_PATH = "./data/train.tsv"
 DEV_PATH = "./data/dev.tsv"
-MODEL_PATH = "./newModel/myModel.ckpt"
+MODEL_PATH = "./model/new2Model.ckpt"
 
 
 #creating a vocabulary with glove embeddings
@@ -83,13 +84,36 @@ def create_embeddings(vocabulary,embedding_dim=EMBEDDING_DIM):
     vectors = torch.stack(vectors).to(device).float()   #convert the list of tensors into a tensor of tensors
     return vectors,word2idx
 
+def create_pos_embeddings(vocabulary,embedding_dim=POS_EMBEDDING_DIM):
+    vectors = []                                #creating a vector to append the vectors corresponding to words
+    word2idx = dict()                           #creating a dictionary to associate each word with an index
+    vectors.append(torch.rand(embedding_dim))   #creating a random vector for unknown (out of vocabulary) words
+    vectors.append(torch.rand(embedding_dim))   #creating a random vector for padding
+    word2idx[UNK_TOKEN] = 0                     #setting the index of the unknown token to 0
+    for tag in vocabulary.keys():      #creating the word:index entry and insert in vectors
+        word2idx[tag] = len(vectors)           #the word vector at the corresponding index for each word
+        vector = torch.rand(embedding_dim)
+        #print(vector)
+        #print(vectors)
+        #while vector in vectors:
+        #    vector = torch.rand(embedding_dim)
+        vectors.append(vector)
+    word2idx = defaultdict(lambda: 0, word2idx) #if the word we're looking for is not in the dictionary, we give the unknown token index
+    vectors = torch.stack(vectors).to(device).float()   #convert the list of tensors into a tensor of tensors
+    return vectors,word2idx
+
+from nltk.data import load
+nltk.download("tagsets")
+tagdict = load('help/tagsets/upenn_tagset.pickle')
 glove = create_glove()  # create glove dictionary
 embeddings, word2idx = create_embeddings(glove)  # create and indexing embeddings
+pos_embeddings,pos2idx = create_pos_embeddings(tagdict,embedding_dim=POS_EMBEDDING_DIM)
 
 
 class SentenceDataset(Dataset):
 
-    def __init__(self, vectors, word2idx, sentences_path=None, sentences=None, lemmatization=True,
+    def __init__(self, vectors, word2idx, pos_vectors, pos2idx, sentences_path=None, sentences=None,
+                 lemmatization=False,
                  test=False, class2id={"O": 0, "B-PER": 1, "B-LOC": 2, "B-GRP": 3, "B-CORP": 4, "B-PROD": 5,
                                        # indexing output classes
                                        "B-CW": 6, "I-PER": 7, "I-LOC": 8, "I-GRP": 9, "I-CORP": 10, "I-PROD": 11,
@@ -97,6 +121,8 @@ class SentenceDataset(Dataset):
         file_output = self.read_file(sentences_path) if sentences_path else self.read_sentences(sentences)
         self.embedding_vectors = vectors
         self.word2idx = word2idx
+        self.pos_vectors = pos_vectors
+        self.pos2idx = pos2idx
         self.test = test
         self.w_lemmatization = lemmatization
         self.word_count = dict()
@@ -163,7 +189,7 @@ class SentenceDataset(Dataset):
             labels = 'UNKNOWN'  # this is needed to make the system able to give a prediction without having a ground truth
             if 'labels' in instance:  # then if there is a ground truth we take it
                 labels = processed['labels']
-            self.sentences.append((processed["text"], labels,
+            self.sentences.append((processed["text"], processed["pos"], labels,
                                    id))  # append a triple (sentence,label,id) which are all the informations we need
         if not self.test: random.Random(42).shuffle(
             self.sentences)  # for the training phase, shuffle data to avoid bias relative to data order
@@ -181,29 +207,21 @@ class SentenceDataset(Dataset):
     # function which includes all the preprocessing steps for the sentences, which are tokenization,
     # stopwords and punctuation removal,pos tagging and lemmatization
     def text_preprocess(self, sentence):
-        text = sentence["text"]
-        labels = sentence["labels"]
-        sent = [(text[i], labels[i]) for i in
-                range(len(text))]  # if text[i] not in string.punctuation and text[i] not in stop_tokens]
-        # sent = [(text[i],labels[i]) for i in range(len(text)) if labels[i] != 'O']
-        sentence["text"] = [pair[0] for pair in sent]
-        sentence["labels"] = [pair[1] for pair in sent]
-        return sentence
-        '''
-        standard_tokens = [(token,self.get_standard(pos)) for token,pos in tokens_n_pos]
-        clean_standard = [(token,pos) for token,pos in standard_tokens if pos != '']   #light stopwords removal
-        clean_standard2 = [(token, pos) for token, pos in standard_tokens if token not in stop_tokens]  # full stopwords removal
-        if self.w_lemmatization:            #choosing if applying lemmatization
-            lemmatized = [(lemmatizer.lemmatize(token.lower(),pos),pos) if pos != '' else (lemmatizer.lemmatize(token.lower()),'') for token,pos in clean_standard2]
-            #print("STARTED BUILDING WORD COUNT")
-            for lemma,pos in lemmatized:
+        tokens_n_pos = nltk.pos_tag(sentence["text"])
+        standard_tokens = [(token, self.get_standard(pos)) for token, pos in tokens_n_pos]
+        if self.w_lemmatization:  # choosing if applying lemmatization
+            lemmatized = [(lemmatizer.lemmatize(token.lower(), pos), pos) if pos != '' else (
+            lemmatizer.lemmatize(token.lower()), '') for token, pos in standard_tokens]
+            # print("STARTED BUILDING WORD COUNT")
+            for lemma, pos in lemmatized:
                 if lemma in self.word_count:
                     self.word_count[lemma] += 1
                 else:
                     self.word_count[lemma] = 1
-            return lemmatized
-        return [(word,pos) for word,pos in clean_standard2]
-        '''
+            sentence["text"] = [lemma for lemma, pos in lemmatized]
+        sentence["pos"] = [pos for word, pos in standard_tokens]
+        return sentence
+        # '''
 
     # function to return the number of instances contained in the dataset
     def __len__(self):
@@ -215,36 +233,49 @@ class SentenceDataset(Dataset):
 
     # custom dataloader which incorporates the collate function
     def dataloader(self, batch_size):
-        return DataLoader(self, batch_size=batch_size, collate_fn=partial(self.collate, self.word2idx))
+        return DataLoader(self, batch_size=batch_size, collate_fn=partial(self.collate))
 
         # function to map each lemma,pos in a sentence to their indexes
 
     def sent2idx(self, sent, word2idx):
-        # return torch.tensor([word2idx[word] for word,pos in sent]) #in the case i'm not using pos I just return a placeholder for pos
         return torch.tensor([word2idx[word] for word in sent])
 
     # custom collate function, used to create the batches to give as input to the nn
     # it's needed because we are dealing with sentences of variable length and we need padding
     # to be sure that each sentence in a batch has the same length, which is necessary since
     # neural networks need fixed dimension inputs
-    def collate(self, word2idx, data):
-        X = [self.sent2idx(instance[0], word2idx) for instance in data]  # extracting the input sentence
+    def collate(self, data):
+        X = [self.sent2idx(instance[0], self.word2idx) for instance in data]  # extracting the input sentence
         X_len = torch.tensor([x.size(0) for x in X], dtype=torch.long).to(device)
-        y = [self.sent2idx(instance[1], self.class2id) for instance in data]
-        ids = [instance[2] for instance in data]  # extracting the sentence ids
+        X_pos = [self.sent2idx(instance[1], self.pos2idx) for instance in data]
+        y = [self.sent2idx(instance[2], self.class2id) for instance in data]
+        ids = [instance[3] for instance in data]  # extracting the sentence ids
         X = torch.nn.utils.rnn.pad_sequence(X, batch_first=True, padding_value=1).to(
+            device)  # padding all the sentences to the maximum length in the batch (forcefully max_len)
+        X_pos = torch.nn.utils.rnn.pad_sequence(X_pos, batch_first=True, padding_value=1).to(
             device)  # padding all the sentences to the maximum length in the batch (forcefully max_len)
         y = torch.nn.utils.rnn.pad_sequence(y, batch_first=True, padding_value=self.class2id[PAD_TOKEN]).to(
             device)  # extracting the ground truth
-        return X, X_len, y, ids
+        return X, X_len, X_pos, y, ids
+
+    def convert_output(self, output):
+        converted = []
+        for sentence in output:
+            converted_sent = []
+            for label in sentence:
+                converted_sent.append(self.id2class[label.item()])
+            converted.append(converted_sent)
+        return converted
 
 def build_model(device: str) -> Model:
     # STUDENT: return StudentModel()
     # STUDENT: your model MUST be loaded on the device "device" indicates
 
-    my_model = StudentModel(embeddings,bidirectional=False,hidden1=512,hidden2=128,lstm_layers=1,p=0.1,loss_fn=nn.CrossEntropyLoss(ignore_index=13),
-                     num_classes=14).to(device)
+    #my_model = StudentModel(embeddings,bidirectional=False,hidden1=512,hidden2=128,lstm_layers=1,p=0.1,loss_fn=nn.CrossEntropyLoss(ignore_index=13),
+    #                 num_classes=14).to(device)
 
+    #my_model = StudentModel(embeddings=embeddings,pos_embeddings=pos_embeddings,bidirectional=True,hidden1=128,lstm_layers=2,p=0.5,num_classes=14).to(device)         #instantiating the model
+    my_model = StudentModel(embeddings=embeddings,pos_embeddings=pos_embeddings,bidirectional=True,hidden1=128,lstm_layers=1,p=0.,num_classes=14).to(device)         #instantiating the model
     my_model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
     return my_model
 
@@ -280,93 +311,94 @@ class RandomBaseline(Model):
 
 # Model class
 # class StudentModel(nn.Module,Model):        #needed for testing
-class StudentModel(nn.Module):  # needed for training
+class StudentModel(nn.Module):             #needed for training
 
-    # constructor method, for which are needed the word embedding vectors, the dimensions of the two linear
-    # layers, the dropout probabilty p, a flag to choose if the lstm layer must be bidirectonal, the number
-    # of layers of the lstm layer and the loss function (but these last 4 already have a default value)
-    def __init__(self, embeddings,  # word embedding vectors
-                 pos_embeddings=None,  # pos embedding vectors
-                 hidden1=128,  # dimension of the first hidden layer
-                 hidden2=128,  # dimension of the second hidden layer
-                 # hidden3=128,
-                 p=0.0,  # probability of dropour layer
-                 bidirectional=False,  # flag to decide if the LSTM must be bidirectional
-                 lstm_layers=1,  # layers of the LSTM
-                 loss_fn=torch.nn.CrossEntropyLoss(ignore_index=0),
-                 num_classes=13):  # loss function
+    #constructor method, for which are needed the word embedding vectors, the dimensions of the two linear
+    #layers, the dropout probabilty p, a flag to choose if the lstm layer must be bidirectonal, the number
+    #of layers of the lstm layer and the loss function (but these last 4 already have a default value)
+    def __init__(self,embeddings,   #word embedding vectors
+                 pos_embeddings=None,    #pos embedding vectors
+                 hidden1=128,           #dimension of the first hidden layer
+                 p=0.0,             #probability of dropour layer
+                 bidirectional=False,   #flag to decide if the LSTM must be bidirectional
+                 lstm_layers=1,         #layers of the LSTM
+                 num_classes=13):   #loss function
         super().__init__()
-        self.embedding = nn.Embedding.from_pretrained(embeddings, freeze=False)
-        self.pos_embeddings = None if pos_embeddings == None else nn.Embedding.from_pretrained(pos_embeddings,
-                                                                                               freeze=False)  # choose if creating or not an embedding layer
-        # based on wether pos embeddings were created
-        input_dim = embeddings.size(1) if not self.pos_embeddings else embeddings.size(1) + pos_embeddings.size(
-            1)  # or not
-        self.lstm = nn.LSTM(input_size=input_dim, hidden_size=hidden1, num_layers=lstm_layers, batch_first=True,
-                            bidirectional=bidirectional)
-        hidden1 = hidden1 * 2 if bidirectional else hidden1
-        self.lin1 = nn.Linear(hidden1, hidden2)
-        self.lin2 = nn.Linear(hidden2, num_classes)
-        # self.lin3 = nn.Linear(hidden3,num_classes)
-        self.loss_fn = loss_fn
+        self.embedding = nn.Embedding.from_pretrained(embeddings,freeze=False)
+        #self.embedding = nn.Embedding(num_embeddings=400003,embedding_dim=EMBEDDING_DIM)
+        self.pos_embeddings = None if pos_embeddings is None else nn.Embedding.from_pretrained(pos_embeddings)
+            #nn.Embedding(num_embeddings=5,embedding_dim=POS_EMBEDDING_DIM)     #choose if creating or not an embedding layer
+
+        input_dim = embeddings.size(1) if not self.pos_embeddings else embeddings.size(1)+pos_embeddings.size(1)                #or not
+        self.lstm = nn.LSTM(input_size=input_dim, hidden_size=hidden1,dropout=p, num_layers=lstm_layers, batch_first=True, bidirectional=bidirectional)
+        hidden1 = hidden1*2 if bidirectional else hidden1
+        self.lin1 = nn.Linear(hidden1, num_classes)
         self.dropout = nn.Dropout(p=p)
         self.num_classes = num_classes
-
-    # forward method, automatically called when calling the instance
-    # it takes the Xs and their length in batches
-    def forward(self, X, X_len):
-        # lemmas,pos = X[...,0],X[...,1]                                  #separating pos from lemmas
-        embeddings = self.embedding(X)  # expanding the words from indices to embedding vectors
-        '''
-        if self.pos_embeddings != None:                                     #in the case I'm using pos embeddings, I pass their indexes through their own embedding layer
-            pos_embeddings_out1 = self.pos_embeddings(pos)                 #and then concatenate them to the corresponding words
-
-            embedding1 = torch.cat([embedding,pos_embeddings_out1],dim=-1)
-        '''
-        # embeddings = embeddings.unsqueeze(1)
+        self.crf = CRF(num_classes,batch_first=True).to(device)
+    #forward method, automatically called when calling the instance
+    #it takes the Xs and their length in batches
+    def forward(self,X,y,X_pos=None):
+        embeddings = self.embedding(X)                                #expanding the words from indices to embedding vectors
+        if self.pos_embeddings is not None:                                     #in the case I'm using pos embeddings, I pass their indexes through their own embedding layer
+            pos_embeddings = self.pos_embeddings(X_pos)                 #and then concatenate them to the corresponding words
+            embeddings = torch.cat([embeddings,pos_embeddings],dim=-1)
+        #1,5,110
         lstm_out = self.lstm(embeddings)[0]
-        lstm_out = lstm_out.squeeze()
+        #lstm_out = lstm_out.squeeze()
         out = self.dropout(lstm_out)
         out = torch.relu(out)
-        # print(out.size())
+        #5,256
+
         out = self.lin1(out)
-        out = self.dropout(out)
-        out = torch.relu(out)
-        out = self.lin2(out)
-        # out = self.dropout(out)
-        # out = torch.relu(out)
-        # out = self.lin3(out)
+        #print(out.size())
         out = out.squeeze(1)
-        # print(out.size())
-        out = torch.softmax(out, dim=-1) if self.num_classes > 1 else torch.sigmoid(out)
-        return out
+        #5,14
 
-
+        mask = y != 13
+        loss = self.crf(out,y,mask)
+        out = self.crf.decode(out)
+        return out,loss
 
     def predict(self, tokens: List[List[str]]) -> List[List[str]]:
         # STUDENT: implement here your predict function
         # remember to respect the same order of tokens!
         batch_size = 32
         predictions = list()
-        dataset = SentenceDataset(sentences=tokens, vectors=embeddings, word2idx=word2idx,test=True)
+        #raise Exception(tokens)
+        #1,5                           raise Exception(len(tokens),len(tokens[0]))
+        dataset = SentenceDataset(sentences=tokens, vectors=embeddings, word2idx=word2idx, pos_vectors=pos_embeddings
+                                  , pos2idx=pos2idx, test=True)
         dataloader = dataset.dataloader(batch_size)
         for batch in dataloader:
-            batch_x = batch[0]
-            batch_xlen = batch[1]
-            ids = batch[3]
-            logits = self.forward(batch_x, batch_xlen)
-            logits = logits.view(-1, logits.shape[-1])
-            preds = torch.argmax(logits,dim=1)
-            preds = torch.reshape(preds,(batch_x.size(0),-1))
+            batch_x = batch[0]  # separating first from second sentences
+            batch_xlen = batch[1]  # separating lengths of first and second sentences
+            batch_x_pos = batch[2]
+            labels = batch[3]  # taking the ground truth
+            #print(labels)
+            ids = batch[4]
+            print(batch_x.size())
+            print(batch_x)
+            #1,5
+            logits,loss = self.forward(batch_x, labels,batch_x_pos) #predict
+            logits = torch.tensor(logits).to(device)
+            #preds = logits.view(-1, logits.shape[-1])
+            preds = logits
+            #preds = torch.argmax(logits, dim=1)
+            #preds = torch.reshape(preds, (batch_x.size(0), -1))
             for i in range(len(batch_x)):
                 prediction = []
                 for j in range(len(batch_x[i])):
-                    if batch_x[i][j].item() != 1:
-                        print(preds)
-                        print(preds[i])
+                    if j < batch_xlen[i]:
+                        #print(preds)
+                        #print(preds[i])
+                        #print(preds[i][j])
                         prediction.append(dataset.id2class[preds[i][j].item()])
                 predictions.append(prediction)
 
 
-
         return predictions
+
+class Error(Exception):
+
+    pass
